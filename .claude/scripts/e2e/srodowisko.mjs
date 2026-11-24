@@ -15,6 +15,7 @@
 import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 
 import { bramkaMigrationsSum } from '../bramki/migrations-sum.mjs'
@@ -35,6 +36,9 @@ const LIMIT_STARTU_SEK = 90
 // z serwerem w tle, ale bez wyniku JSON.
 // Przed startem serwera biegnie probny zrzut (do 30 s) i zamkniecie jego sesji (do 10 s) — zapas 60 s do limitu Basha.
 const MAKS_STARTU_SEK = 500
+// Log i plik PID serwera. Na Windows `/tmp` w Node to C:\tmp (zwykle nie istnieje), a `/tmp` Git Basha agentow to katalog
+// tymczasowy uzytkownika — os.tmpdir() trafia w ten sam katalog z obu stron.
+export const KATALOG_PLIKOW_SERWERA = process.platform === 'win32' ? tmpdir() : '/tmp'
 
 /**
  * @typedef {{ url: string, zdrowie: string, zdrowieTresc: string | null, port: number, lokalny: boolean, start: string, limitSek: number, log: string, pid: string,
@@ -110,8 +114,8 @@ export function konfiguracja(projekt, env) {
     lokalny: !adres || HOSTY_LOKALNE.includes(adres.hostname),
     start: env.E2E_START || komendaStartu(menedzerPakietow(projekt), port),
     limitSek: Math.min(Number(env.E2E_START_TIMEOUT) > 0 ? Number(env.E2E_START_TIMEOUT) : LIMIT_STARTU_SEK, MAKS_STARTU_SEK),
-    log: `/tmp/autopilot-e2e-${nazwa}.log`,
-    pid: `/tmp/autopilot-e2e-${nazwa}.pid`,
+    log: join(KATALOG_PLIKOW_SERWERA, `autopilot-e2e-${nazwa}.log`),
+    pid: join(KATALOG_PLIKOW_SERWERA, `autopilot-e2e-${nazwa}.pid`),
     bazaE2e: existsSync(join(projekt, 'supabase')) || Object.keys(env).some((k) => k.startsWith('SUPABASE_E2E_')),
     // Odcisk konfiguracji w pliku PID: serwer z poprzedniego runu jest nasz tylko przy tej samej komendzie i tym samym .env.e2e.
     odcisk: createHash('sha256').update(JSON.stringify(Object.entries(env).sort())).digest('hex').slice(0, 16),

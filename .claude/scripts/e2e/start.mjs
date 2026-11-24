@@ -34,7 +34,9 @@ import { bledySrodowiska, envE2e, konfiguracja, NARZEDZIA, PLIK_ENV } from './sr
  */
 
 // Komenda startu bez aplikacji: pnpm/npm bez binarki, skryptu albo package.json, powloka bez programu (kod 127).
-const BRAK_APLIKACJI = /Command "[^"]+" not found|command not found|ERR_PNPM_NO_IMPORTER_MANIFEST_FOUND|ERR_PNPM_NO_SCRIPT|Missing script|ENOENT[^\n]*package\.json/i
+// Windows: cmd.exe (spawn z shell: true) konczy nieznana komende kodem 1, nie 127 — rozpoznanie po komunikacie cmd
+// w wersji angielskiej i polskiej systemu.
+const BRAK_APLIKACJI = /Command "[^"]+" not found|command not found|is not recognized as an internal or external command|nie jest rozpoznawan[ya] jako polecenie wewn|ERR_PNPM_NO_IMPORTER_MANIFEST_FOUND|ERR_PNPM_NO_SCRIPT|Missing script|ENOENT[^\n]*package\.json/i
 const KOD_BRAKU_PROGRAMU = 127
 // Kroki stacku wokol serwera z adaptera; testy rdzenia podstawiaja wlasne.
 const KROKI_STACKU = { przedStartem, poStarcie }

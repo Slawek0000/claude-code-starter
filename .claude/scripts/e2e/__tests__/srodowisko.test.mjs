@@ -428,6 +428,13 @@ test('start: nasz aktualny serwer bez oczekiwanej tresci sondy = restart, nie ur
   assert.match(drugi.detal, /oczekiwana treść/)
 })
 
+const NA_WINDOWS = process.platform === 'win32'
+/** @param {number} pid proces serwera z calym drzewem (Windows nie ma grup procesow: taskkill /T) */
+function zabijZZewnatrz(pid) {
+  if (NA_WINDOWS) spawnSync('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore' })
+  else process.kill(-pid, 'SIGTERM')
+}
+
 test('stan: nasz serwer zabity z zewnatrz = nasz, nie zyje; serwer zastany (bez PID) = nie nasz', async () => {
   const port = await wolnyPort()
   const start = `node -e "require('http').createServer((q,s)=>s.end('ok')).listen(${port})"`
@@ -436,7 +443,7 @@ test('stan: nasz serwer zabity z zewnatrz = nasz, nie zyje; serwer zastany (bez 
   const konf = konfProjektu(p)
   assert.deepEqual({ nasz: stanSerwera(konf).nasz, zyje: stanSerwera(konf).zyje }, { nasz: true, zyje: true })
   const { pid } = JSON.parse(readFileSync(konf.pid, 'utf8'))
-  process.kill(-pid, 'SIGTERM')
+  zabijZZewnatrz(pid)
   await new Promise((r) => setTimeout(r, 300))
   assert.deepEqual({ nasz: stanSerwera(konf).nasz, zyje: stanSerwera(konf).zyje }, { nasz: true, zyje: false })
   await zatrzymajSerwer(konf)
@@ -459,7 +466,9 @@ test('zmiana .env.e2e: nasz serwer ze stara konfiguracja zatrzymany i uruchomion
   assert.equal(await odpowiedz(`http://127.0.0.1:${port}`), 'b')
 })
 
-test('nasz serwer zywy, ale zawieszony (nie odpowiada): start zatrzymuje go i uruchamia od nowa', async () => {
+test('nasz serwer zywy, ale zawieszony (nie odpowiada): start zatrzymuje go i uruchamia od nowa', {
+  skip: NA_WINDOWS && 'Windows nie ma SIGSTOP (zawieszenia procesu sygnalem)',
+}, async () => {
   const port = await wolnyPort()
   const start = `node -e "require('http').createServer((q,s)=>s.end('ok')).listen(${port})"`
   const p = projekt({ env: `E2E_URL=http://127.0.0.1:${port}\nE2E_START=${start}\nE2E_START_TIMEOUT=20\n` })
@@ -475,7 +484,7 @@ test('PID ponownie uzyty przez inny proces uzytkownika (inny czas startu): nie n
   const p = projekt({ env: 'E2E_URL=http://127.0.0.1:1\n' })
   const konf = konfProjektu(p)
   const { spawn } = await import('node:child_process')
-  const obcy = spawn('sleep', ['30'])
+  const obcy = spawn(process.execPath, ['-e', 'setTimeout(()=>{},30000)'])
   writeFileSync(konf.pid, JSON.stringify({ pid: obcy.pid, start: konf.start, odcisk: konf.odcisk, uruchomiony: 'Mon Jan  1 00:00:00 2024' }))
   assert.equal(stanSerwera(konf).zyje, false)
   await zatrzymajSerwer(konf)
@@ -624,8 +633,13 @@ test('obcy serwer HTTP na porcie E2E: start i sprawdzenie = STOP z PID-em, komen
     for (const uruchom of [true, false]) {
       const w = await startE2e(p, ZADANIE, { uruchom, narzedzia: SPRAWNE, politykaObcego: 'stop' })
       assert.deepEqual([w.status, w.serwer], ['niepowodzenie', 'obcy'], `uruchom=${uruchom}: ${w.detal}`)
-      assert.match(w.detal, new RegExp(`na porcie ${port} dziala serwer spoza pipeline'u — PID ${obcy.pid}: \\S*node -e require\\('http'\\)`))
-      assert.match(w.naprawa, new RegExp(`^Zatrzymaj go: \`kill ${obcy.pid}\`.*E2E_URL=http://localhost:<port>.*lsof -nP -iTCP:${port} -sTCP:LISTEN`))
+      // Windows: linia polecen procesu ma sciezke node.exe i argumenty w cudzyslowach (Win32_Process.CommandLine).
+      const komenda = NA_WINDOWS ? `.*node(\\.exe)?"? -e "?require\\('http'\\)` : `\\S*node -e require\\('http'\\)`
+      assert.match(w.detal, new RegExp(`na porcie ${port} dziala serwer spoza pipeline'u — PID ${obcy.pid}: ${komenda}`))
+      const [zabij, kto] = NA_WINDOWS
+        ? [`taskkill /PID ${obcy.pid} /T /F`, `Get-NetTCPConnection -State Listen -LocalPort ${port}`]
+        : [`kill ${obcy.pid}`, `lsof -nP -iTCP:${port} -sTCP:LISTEN`]
+      assert.match(w.naprawa, new RegExp(`^Zatrzymaj go: \`${zabij}\`.*E2E_URL=http://localhost:<port>.*${kto}`))
       assert.match(w.naprawa, /Sprawdzenie: node \.claude\/scripts\/e2e\/e2e\.mjs sprawdz --zadanie docs\/active\/z$/)
     }
     assert.equal(existsSync(konfProjektu(p).pid), false, 'pipeline nie uruchomil wlasnego serwera')
@@ -647,7 +661,7 @@ test('obcy serwer HTTP zajal port w trakcie runu: restart fazy = niepowodzenie z
     assert.deepEqual([w.status, w.serwer, w.obcy?.pid, w.log], ['niepowodzenie', 'obcy', obcy.pid, null], w.detal)
     assert.match(w.detal, new RegExp(`PID ${obcy.pid}: `))
     assert.doesNotMatch(w.detal, /kill/, 'detal idzie do testera jako przyczyna — bez polecenia kill')
-    assert.match(w.naprawa ?? '', new RegExp(`^Zatrzymaj go: \`kill ${obcy.pid}\``))
+    assert.match(w.naprawa ?? '', new RegExp(`^Zatrzymaj go: \`${NA_WINDOWS ? `taskkill /PID ${obcy.pid} /T /F` : `kill ${obcy.pid}`}\``))
     assert.equal(await odpowiedz(`http://127.0.0.1:${port}`), 'obcy')
   } finally {
     obcy.kill()
@@ -697,7 +711,9 @@ test('E2E_HEALTH wskazuje inna dzialajaca usluge, port E2E wolny = start, nie ob
 
 // Recenzja P19: potomek naszego serwera, ktory przezyl SIGTERM po smierci rodzica, trzymal port — restart widzial go jako obcy
 // i kazal operatorowi zabic wlasny proces pipeline'u. Zatrzymanie dobija cala grupe procesu.
-test('restart: potomek naszego serwera ignorujacy SIGTERM ginie z grupa — restart uruchamia serwer, nie zglasza obcego', async () => {
+test('restart: potomek naszego serwera ignorujacy SIGTERM ginie z grupa — restart uruchamia serwer, nie zglasza obcego', {
+  skip: NA_WINDOWS && 'POSIX: SIGTERM i `& wait`; na Windows taskkill /T /F zatrzymuje drzewo bez sygnalow',
+}, async () => {
   const port = await wolnyPort()
   const start = `node -e "process.on('SIGTERM',()=>{});require('http').createServer((q,s)=>s.end('nasz')).listen(${port})" & wait`
   const p = projekt({ env: `E2E_URL=http://127.0.0.1:${port}\nE2E_START=${start}\nE2E_START_TIMEOUT=20\n` })
@@ -710,7 +726,7 @@ test('restart: potomek naszego serwera ignorujacy SIGTERM ginie z grupa — rest
 // (test wyzej); `zastap` (stack, w ktorym serwer czyta env przy starcie — Metro w Expo) zatrzymuje obcy proces z PID-em
 // i stawia serwer pipeline'u. Bez PID-u (lsof niedostepny, host nielokalny) zastapic nie ma czego — zostaje STOP.
 test('start z polityka zastap: obcy serwer z PID-em zatrzymany, nasz uruchomiony; sprawdzenie bez startu nie blokuje', {
-  skip: spawnSync('lsof', ['-v']).error ? 'brak lsof' : false,
+  skip: !NA_WINDOWS && spawnSync('lsof', ['-v']).error ? 'brak lsof' : false,
 }, async () => {
   const port = await wolnyPort()
   const kod = `require('http').createServer((q,s)=>s.end('ok')).listen(${port})`

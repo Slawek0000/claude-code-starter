@@ -5,12 +5,13 @@
 import { spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { dirname, join, resolve } from 'node:path'
+import { basename, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
 import { PROFIL } from '../../stack/profil.mjs'
+import { KATALOG_PLIKOW_SERWERA } from '../srodowisko.mjs'
 
 // Katalog seedow E2E z profilu stacku (IU-1.7) — test przechodzi na kazdym wariancie profilu.
 const SEEDY = PROFIL.e2e.katalogSeedow
@@ -147,8 +148,8 @@ test('restart i advisors: kontrakt CLI — wymagane --zadanie i --faza, JSON z k
     assert.equal(uruchom(k, ['start', '--przed-pierwsza-faza']).kod, 2)
   } finally {
     rmSync(k, { recursive: true, force: true })
-    rmSync(`/tmp/autopilot-e2e-${k.split('/').pop()}.pid`, { force: true })
-    rmSync(`/tmp/autopilot-e2e-${k.split('/').pop()}.log`, { force: true })
+    rmSync(join(KATALOG_PLIKOW_SERWERA, `autopilot-e2e-${basename(k)}.pid`), { force: true })
+    rmSync(join(KATALOG_PLIKOW_SERWERA, `autopilot-e2e-${basename(k)}.log`), { force: true })
   }
 })
 

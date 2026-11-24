@@ -8,12 +8,16 @@
 // Obcy serwer na porcie E2E (P19, vibersi etap 2: zwykly `vite --port 5173` na bazie dev przyjety jako „zastany”, 9 scenariuszy
 // SKIP) to porazka startu z PID-em i komenda procesu: pipeline nie testuje na serwerze, ktorego konfiguracji nie zna. Tak dziala
 // polityka `stop` z adaptera; `zastap` (D11, stack z serwerem czytajacym env przy starcie) zatrzymuje obcy proces i stawia nasz.
+// Windows (brak `ps -o`, `lsof` i grup procesow): czas startu, port i zatrzymanie drzewa procesow daje windows.mjs.
 
 import { spawn, spawnSync } from 'node:child_process'
 import { closeSync, existsSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { setTimeout as czekaj } from 'node:timers/promises'
 
 import { POLITYKA_OBCEGO } from './adapter.mjs'
+import {
+  czasStartuWindows, komendaPortuWindows, komendaZatrzymaniaWindows, procesNaPorcieWindows, uruchomWTleWindows, zatrzymajDrzewoWindows,
+} from './windows.mjs'
 
 const LIMIT_SONDY_MS = 3000
 const ODSTEP_SONDY_MS = 500
@@ -21,6 +25,12 @@ const LINIE_OGONA_LOGU = 20
 const LIMIT_ZATRZYMANIA_MS = 5000
 // Token Management API (advisors) — dostep do calego konta Supabase; procesowi aplikacji niepotrzebny, takze z powloki operatora.
 const KLUCZE_POZA_SERWEREM = ['SUPABASE_ACCESS_TOKEN']
+const NA_WINDOWS = process.platform === 'win32'
+// Komenda, ktora konczy sie od razu (brak programu, brak package.json), bywa martwa, zanim odczytamy jej czas startu — wtedy
+// czekamy chwile na kod wyjscia, zeby start rozpoznal projekt bez aplikacji, a nie zglaszal „komenda nie wystartowala”.
+const LIMIT_WYJSCIA_PO_STARCIE_MS = 2000
+// Czas startu w pliku PID takiego procesu: zaden odczyt czasu go nie zwroci, wiec proces nigdy nie jest „zywy nasz”.
+const ZAKONCZONY_PRZED_ODCZYTEM = '(zakonczony przed odczytem czasu startu)'
 
 /**
  * @typedef {import('./srodowisko.mjs').Konfiguracja} Konfiguracja
@@ -50,6 +60,7 @@ export async function odpowiada(url, tresc = null) {
  * @returns {{ pid: number, komenda: string } | null | undefined}
  */
 export function procesNaPorcie(port) {
+  if (NA_WINDOWS) return procesNaPorcieWindows(port)
   const w = spawnSync('lsof', ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-t'], { encoding: 'utf8' })
   if (w.error) return undefined
   const pid = Number((w.stdout ?? '').trim().split('\n')[0])
@@ -79,8 +90,10 @@ export function opisObcego(konf, obcy) {
 
 /** @param {Konfiguracja} konf @param {ObcySerwer} obcy @returns {string} */
 export function naprawaObcego(konf, obcy) {
-  const stop = obcy.pid ? `Zatrzymaj go: \`kill ${obcy.pid}\` (sprawdz wczesniej, czy to nie Twoj dev server w uzyciu)` : `Zatrzymaj serwer odpowiadajacy na ${konf.url}`
-  return `${stop} albo ustaw w .env.e2e wolny port: E2E_URL=http://localhost:<port>. Kto trzyma port: \`lsof -nP -iTCP:${konf.port} -sTCP:LISTEN\`.`
+  const zabij = obcy.pid ? (NA_WINDOWS ? komendaZatrzymaniaWindows(obcy.pid) : `kill ${obcy.pid}`) : null
+  const stop = zabij ? `Zatrzymaj go: \`${zabij}\` (sprawdz wczesniej, czy to nie Twoj dev server w uzyciu)` : `Zatrzymaj serwer odpowiadajacy na ${konf.url}`
+  const kto = NA_WINDOWS ? komendaPortuWindows(konf.port) : `lsof -nP -iTCP:${konf.port} -sTCP:LISTEN`
+  return `${stop} albo ustaw w .env.e2e wolny port: E2E_URL=http://localhost:<port>. Kto trzyma port: \`${kto}\`.`
 }
 
 /** @param {string} plik @returns {string} ostatnie linie logu serwera */
@@ -94,6 +107,7 @@ function ogonLogu(plik) {
  * @returns {string | null} czas startu procesu albo null, gdy procesu nie ma
  */
 function czasStartu(pid, env = { ...process.env, LC_ALL: 'C' }) {
+  if (NA_WINDOWS) return czasStartuWindows(pid)
   const w = spawnSync('ps', ['-o', 'lstart=', '-p', String(pid)], { encoding: 'utf8', env })
   return w.status === 0 && w.stdout.trim() ? w.stdout.trim() : null
 }
@@ -112,11 +126,11 @@ function zapisPid(konf) {
 
 /**
  * Proces z pliku zyje i to ten sam proces (czas startu). Plik zapisany przed odczytem w locale C ma date w locale sesji
- * startu — porownanie takze z odczytem w biezacym locale.
+ * startu — porownanie takze z odczytem w biezacym locale (na Windows czas startu nie zalezy od locale: jeden odczyt).
  * @param {ZapisPid | null} z
  * @returns {boolean}
  */
-const zyjeNasz = (z) => z !== null && (czasStartu(z.pid) === z.uruchomiony || czasStartu(z.pid, process.env) === z.uruchomiony)
+const zyjeNasz = (z) => z !== null && (czasStartu(z.pid) === z.uruchomiony || (!NA_WINDOWS && czasStartu(z.pid, process.env) === z.uruchomiony))
 
 /** @param {number} pid @param {NodeJS.Signals} sygnal */
 function sygnalGrupie(pid, sygnal) {
@@ -132,6 +146,12 @@ function sygnalGrupie(pid, sygnal) {
 
 /** @param {ZapisPid} z — SIGTERM (z SIGCONT dla zawieszonego), po limicie SIGKILL; czeka na koniec procesu */
 async function zatrzymajProces(z) {
+  if (NA_WINDOWS) {
+    zatrzymajDrzewoWindows(z.pid)
+    const termin = Date.now() + LIMIT_ZATRZYMANIA_MS
+    while (Date.now() < termin && zyjeNasz(z)) await czekaj(ODSTEP_SONDY_MS / 5)
+    return
+  }
   sygnalGrupie(z.pid, 'SIGCONT')
   sygnalGrupie(z.pid, 'SIGTERM')
   const termin = Date.now() + LIMIT_ZATRZYMANIA_MS
@@ -182,6 +202,16 @@ export function stanSerwera(konf) {
 }
 
 /**
+ * Wynik startu, gdy komenda zakonczyla sie przed odpowiedzia sondy: kod wyjscia i ogon logu (rozpoznanie projektu bez aplikacji).
+ * @param {Konfiguracja} konf @param {number | string} wyjscie
+ * @returns {{ serwer: 'brak', blad: string, wyjscie: number | string, ogon: string }}
+ */
+function zakonczonaPrzedOdpowiedzia(konf, wyjscie) {
+  const ogon = ogonLogu(konf.log)
+  return { serwer: 'brak', blad: `komenda startu „${konf.start}” zakonczyla sie (${wyjscie}) przed odpowiedzia ${konf.zdrowie}. Log ${konf.log}:\n${ogon}`, wyjscie, ogon }
+}
+
+/**
  * Start serwera aplikacji. Nasz zywy serwer z aktualna konfiguracja i odpowiedzia = `uruchomione`; nasz ze stara konfiguracja
  * albo zawieszony — zatrzymany i uruchomiony od nowa; obcy serwer na porcie = `obcy` z bledem, PID-em i komenda (P19).
  * `odNowa` (restart przed testerem fazy, P17): nasz serwer zatrzymany i uruchomiony od nowa zawsze — serwer sprzed zmian fazy
@@ -210,25 +240,36 @@ export async function uruchomSerwer(projekt, konf, env, { odNowa = false, polity
   const log = openSync(konf.log, 'w')
   const srodowisko = { ...process.env, ...env }
   for (const k of KLUCZE_POZA_SERWEREM) delete srodowisko[k]
-  const dziecko = spawn(konf.start, { cwd: projekt, shell: true, detached: true, stdio: ['ignore', log, log], env: srodowisko })
+  const tlo = NA_WINDOWS
+    ? uruchomWTleWindows({ projekt, start: konf.start, log: konf.log, env: srodowisko })
+    : { proces: spawn(konf.start, { cwd: projekt, shell: true, detached: true, stdio: ['ignore', log, log], env: srodowisko }), pid: null }
   closeSync(log)
+  const dziecko = tlo.proces
   /** @type {number | string | null} */
   let wyjscie = null
   dziecko.on('exit', (kod, sygnal) => { wyjscie = kod ?? sygnal ?? 'nieznany' })
   dziecko.unref()
-  const uruchomiony = dziecko.pid === undefined ? null : czasStartu(dziecko.pid)
-  if (dziecko.pid === undefined || uruchomiony === null) return { serwer: 'brak', blad: `komenda startu nie wystartowala: ${konf.start}. Log ${konf.log}:\n${ogonLogu(konf.log)}` }
+  // Na Windows serwer to cmd.exe ze Start-Process (PID z PowerShella), a `dziecko` — PowerShell czekajacy na jego kod wyjscia.
+  const pid = NA_WINDOWS ? await tlo.pid : dziecko.pid
+  const uruchomiony = pid === undefined || pid === null ? null : czasStartu(pid)
+  if (pid !== undefined && uruchomiony === null) {
+    const termin = Date.now() + LIMIT_WYJSCIA_PO_STARCIE_MS
+    while (Date.now() < termin && wyjscie === null) await czekaj(ODSTEP_SONDY_MS / 10)
+    if (wyjscie !== null) {
+      // Plik PID jak przy smierci w petli nizej: `stan` pokazuje nasz martwy serwer z ogonem logu, nie „nie nasz”.
+      if (pid !== null) writeFileSync(konf.pid, JSON.stringify({ pid, start: konf.start, odcisk: konf.odcisk, uruchomiony: ZAKONCZONY_PRZED_ODCZYTEM }))
+      return zakonczonaPrzedOdpowiedzia(konf, wyjscie)
+    }
+  }
+  if (pid === undefined || pid === null || uruchomiony === null) return { serwer: 'brak', blad: `komenda startu nie wystartowala: ${konf.start}. Log ${konf.log}:\n${ogonLogu(konf.log)}` }
   /** @type {ZapisPid} */
-  const zapis = { pid: dziecko.pid, start: konf.start, odcisk: konf.odcisk, uruchomiony }
+  const zapis = { pid, start: konf.start, odcisk: konf.odcisk, uruchomiony }
   writeFileSync(konf.pid, JSON.stringify(zapis))
   const termin = Date.now() + konf.limitSek * 1000
   while (Date.now() < termin) {
     if (await odpowiada(konf.zdrowie, konf.zdrowieTresc)) return zastapiony ? { serwer: 'uruchomione', zastapiony } : { serwer: 'uruchomione' }
-    if (wyjscie !== null) {
-      // Plik PID martwego procesu zostaje: `stan` pokaze nasz serwer z ogonem logu (kod fazy go polozyl), nastepny start go nadpisze.
-      const ogon = ogonLogu(konf.log)
-      return { serwer: 'brak', blad: `komenda startu „${konf.start}” zakonczyla sie (${wyjscie}) przed odpowiedzia ${konf.zdrowie}. Log ${konf.log}:\n${ogon}`, wyjscie, ogon }
-    }
+    // Plik PID martwego procesu zostaje: `stan` pokaze nasz serwer z ogonem logu (kod fazy go polozyl), nastepny start go nadpisze.
+    if (wyjscie !== null) return zakonczonaPrzedOdpowiedzia(konf, wyjscie)
     await czekaj(ODSTEP_SONDY_MS)
   }
   await zatrzymajProces(zapis)
