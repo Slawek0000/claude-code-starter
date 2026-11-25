@@ -7,5 +7,5 @@ Slot stackowy skilla (rejestr: `stacks/sloty.json`). Routing builderów i scenar
 
 - Klucze klienta (publiczne, trafiają do paczki): `VITE_*`.
 - Assety i treści: favicon, ikony, ilustracje stanów pustych; IU z assetami pracują w `public/` i `src/assets/`.
-- Środowisko E2E: tryb `--mode e2e` Vite. Dowód działania: `<pm> run dev -- --mode e2e --port 5174` startuje,
+- Środowisko E2E: tryb `--mode e2e` Vite. Dowód działania: domyślny `E2E_START` (`pnpm run dev --mode e2e --port 5174`, w npm z `--` przed flagami) startuje,
   a localhost:5174 loguje się kontem `E2E_TEST_EMAIL`.

@@ -97,7 +97,9 @@ test('adapter web: Vite w trybie e2e na 5174, stop przy obcym procesie, sonda na
   assert.equal(OPIS_PORTU_DEV, 'port zwyklego dev servera Vite')
   assert.equal(POLITYKA_OBCEGO, 'stop')
   assert.equal(SCIEZKA_ZDROWIA, '')
-  assert.equal(komendaStartu('pnpm', 5174), 'pnpm run dev -- --mode e2e --port 5174 --strictPort')
+  // pnpm (od v7) przekazuje `--` do skryptu, a Vite ignoruje argumenty po nim; `--` tylko dla npm, ktory bez niego zjada flagi.
+  assert.equal(komendaStartu('pnpm', 5174), 'pnpm run dev --mode e2e --port 5174 --strictPort')
+  assert.equal(komendaStartu('npm', 5174), 'npm run dev -- --mode e2e --port 5174 --strictPort')
   assert.equal(NARZEDZIE_JAZDY.nazwa, 'agent-browser')
   assert.match(NARZEDZIE_JAZDY.instalacja, /^npm install -g agent-browser/)
 })

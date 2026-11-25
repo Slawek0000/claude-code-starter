@@ -60,8 +60,11 @@ export const SCIEZKA_ZDROWIA = ''
 export const PORT_DEV = 5173
 export const OPIS_PORTU_DEV = 'port zwyklego dev servera Vite'
 
+// Dwukreslnik tylko dla npm: npm bez `--` bierze flagi za wlasna konfiguracje, a pnpm (od v7) przekazuje `--` do skryptu —
+// `vite -- --mode e2e --port 5174` ignoruje argumenty i wstaje na 5173 bez .env.e2e (smoke dashboard-sprzedazy, 2026-11-25).
+// yarn i bun przekazuja do skryptu flagi po jego nazwie. Pilnuje __tests__/komenda-startu.test.mjs.
 /** @param {string} pm menedzer pakietow @param {number | string} port @returns {string} */
-export const komendaStartu = (pm, port) => `${pm} run dev -- --mode e2e --port ${port} --strictPort`
+export const komendaStartu = (pm, port) => `${pm} run dev ${pm === 'npm' ? '-- ' : ''}--mode e2e --port ${port} --strictPort`
 
 export const NARZEDZIE_JAZDY = { nazwa: 'agent-browser', instalacja: 'npm install -g agent-browser && agent-browser install', diagnoza: 'agent-browser doctor' }
 

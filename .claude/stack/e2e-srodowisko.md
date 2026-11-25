@@ -6,7 +6,8 @@ konto `E2E_TEST_EMAIL`, polecenia `node .claude/scripts/e2e/e2e.mjs start|restar
 
 ## Start aplikacji
 
-- Serwer: Vite w trybie `--mode e2e`. Domyślny `E2E_START` = `<pm> run dev -- --mode e2e --port <port> --strictPort`.
+- Serwer: Vite w trybie `--mode e2e`. Domyślny `E2E_START` = `<pm> run dev --mode e2e --port <port> --strictPort`, w npm z `--` przed flagami
+  (`npm run dev -- --mode e2e …`). pnpm przekazuje `--` do skryptu, a Vite ignoruje argumenty po nim i wstaje na 5173.
 - Adres: `E2E_URL`, domyślnie `http://localhost:5174` — obok domyślnego 5173 dev servera Vite, żeby zwykły `pnpm dev`
   nie został wzięty za serwer aplikacji. Port z `--port` w `E2E_START` musi być portem `E2E_URL`.
 - Aplikacja z osobnym serwerem API: `E2E_START` uruchamia oba procesy (wzór w `.claude/templates/e2e-env/README.md`,
